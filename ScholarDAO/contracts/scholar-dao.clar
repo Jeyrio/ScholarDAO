@@ -120,3 +120,85 @@
     (ok true)
   )
 )
+
+(define-public (register-student-profile 
+  (name (string-ascii 100)) 
+  (institution (string-ascii 200)) 
+  (field-of-study (string-ascii 100)) 
+  (gpa uint))
+  (begin
+    (asserts! (is-none (map-get? student-profiles { student: tx-sender })) err-already-exists)
+    (asserts! (<= gpa u400) err-invalid-amount) ;; GPA should be <= 4.00 (represented as 400)
+    (map-set student-profiles
+      { student: tx-sender }
+      {
+        name: name,
+        institution: institution,
+        field-of-study: field-of-study,
+        gpa: gpa,
+        registration-date: block-height
+      })
+    (ok true)
+  )
+)
+
+(define-public (batch-vote (proposal-votes (list 10 { proposal-id: uint, support: bool })))
+  (begin
+    (fold batch-vote-helper proposal-votes (ok true))
+  )
+)
+
+(define-private (batch-vote-helper (vote-data { proposal-id: uint, support: bool }) (prev-result (response bool uint)))
+  (match prev-result
+    success (vote (get proposal-id vote-data) (get support vote-data))
+    error-val (err error-val)
+  )
+)
+
+(define-public (delegate-voting-power (delegate principal))
+  (begin
+    (asserts! (not (is-eq tx-sender delegate)) err-invalid-amount)
+    (asserts! (> (get-donor-contribution tx-sender) u0) err-insufficient-funds)
+    (map-set voting-delegates { delegator: tx-sender } { delegate: delegate })
+    (ok true)
+  )
+)
+
+(define-public (submit-milestone-proposal 
+  (total-amount uint) 
+  (description (string-ascii 500))
+  (milestone-count uint)
+  (milestone-amounts (list 5 uint)))
+  (let ((proposal-id (var-get next-proposal-id)))
+    (asserts! (> milestone-count u0) err-invalid-amount)
+    (asserts! (<= milestone-count u5) err-invalid-amount)
+    (asserts! (is-eq (len milestone-amounts) milestone-count) err-invalid-amount)
+    (asserts! (is-eq total-amount (fold + milestone-amounts u0)) err-invalid-amount)
+    
+    (map-set proposals
+      { proposal-id: proposal-id }
+      {
+        student: tx-sender,
+        amount: total-amount,
+        description: description,
+        votes-for: u0,
+        votes-against: u0,
+        executed: false,
+        created-at: block-height
+      }
+    )
+    
+    (map-set milestone-proposals
+      { proposal-id: proposal-id }
+      {
+        milestone-count: milestone-count,
+        milestone-amounts: milestone-amounts,
+        milestones-completed: u0,
+        current-milestone: u0
+      }
+    )
+    
+    (var-set next-proposal-id (+ proposal-id u1))
+    (ok proposal-id)
+  )
+)
