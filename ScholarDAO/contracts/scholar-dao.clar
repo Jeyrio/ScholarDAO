@@ -245,3 +245,76 @@
   )
 )
 
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? proposals { proposal-id: proposal-id })
+)
+
+(define-read-only (get-donor-contribution (donor principal))
+  (default-to u0 (get amount (map-get? donor-contributions { donor: donor })))
+)
+
+(define-read-only (get-total-fund)
+  (var-get total-fund)
+)
+
+(define-read-only (get-student-profile (student principal))
+  (map-get? student-profiles { student: student })
+)
+
+(define-read-only (get-proposal-category (proposal-id uint))
+  (map-get? proposal-categories { proposal-id: proposal-id })
+)
+
+(define-read-only (is-proposal-active (proposal-id uint))
+  (match (map-get? proposals { proposal-id: proposal-id })
+    proposal (< (- block-height (get created-at proposal)) (var-get proposal-duration))
+    false
+  )
+)
+
+(define-read-only (get-proposal-stats (proposal-id uint))
+  (match (map-get? proposals { proposal-id: proposal-id })
+    proposal (some {
+      total-votes: (+ (get votes-for proposal) (get votes-against proposal)),
+      vote-ratio: (if (> (+ (get votes-for proposal) (get votes-against proposal)) u0)
+                    (/ (* (get votes-for proposal) u100) (+ (get votes-for proposal) (get votes-against proposal)))
+                    u0),
+      is-winning: (> (get votes-for proposal) (get votes-against proposal)),
+      blocks-remaining: (if (>= (- block-height (get created-at proposal)) (var-get proposal-duration))
+                          u0
+                          (- (var-get proposal-duration) (- block-height (get created-at proposal))))
+    })
+    none
+  )
+)
+
+(define-read-only (get-voter-history (voter principal) (proposal-id uint))
+  (map-get? votes { proposal-id: proposal-id, voter: voter })
+)
+
+(define-read-only (get-proposal-duration)
+  (var-get proposal-duration)
+)
+
+(define-read-only (get-voting-delegate (delegator principal))
+  (map-get? voting-delegates { delegator: delegator })
+)
+
+(define-read-only (get-milestone-proposal (proposal-id uint))
+  (map-get? milestone-proposals { proposal-id: proposal-id })
+)
+
+(define-read-only (get-total-donations)
+  (var-get total-fund)
+)
+
+(define-read-only (can-vote (voter principal) (proposal-id uint))
+  (and 
+    (is-some (map-get? proposals { proposal-id: proposal-id }))
+    (is-none (map-get? votes { proposal-id: proposal-id, voter: voter }))
+    (or 
+      (> (get-donor-contribution voter) u0)
+      (is-some (map-get? voting-delegates { delegator: voter }))
+    )
+  )
+)
