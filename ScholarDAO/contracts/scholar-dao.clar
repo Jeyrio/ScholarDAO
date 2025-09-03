@@ -35,6 +35,7 @@
   { vote: bool }
 )
 
+;; New map for student profiles
 (define-map student-profiles
   { student: principal }
   {
@@ -46,6 +47,7 @@
   }
 )
 
+;; New map for milestone-based proposals
 (define-map milestone-proposals
   { proposal-id: uint }
   {
@@ -56,9 +58,16 @@
   }
 )
 
+;; New map for voting delegation
 (define-map voting-delegates
   { delegator: principal }
   { delegate: principal }
+)
+
+;; Map for proposal categories
+(define-map proposal-categories
+  { proposal-id: uint }
+  { category: (string-ascii 50) }
 )
 
 (define-public (contribute (amount uint))
@@ -81,7 +90,7 @@
         votes-for: u0,
         votes-against: u0,
         executed: false,
-        created-at: block-height
+        created-at: stacks-block-height
       }
     )
     (var-set next-proposal-id (+ proposal-id u1))
@@ -121,6 +130,7 @@
   )
 )
 
+;; NEW FUNCTION 1: Register student profile
 (define-public (register-student-profile 
   (name (string-ascii 100)) 
   (institution (string-ascii 200)) 
@@ -136,12 +146,24 @@
         institution: institution,
         field-of-study: field-of-study,
         gpa: gpa,
-        registration-date: block-height
+        registration-date: stacks-block-height
       })
     (ok true)
   )
 )
 
+;; NEW FUNCTION 2: Emergency withdraw (owner only)
+(define-public (emergency-withdraw (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
+    (try! (as-contract (stx-transfer? amount tx-sender contract-owner)))
+    (var-set total-fund (- (var-get total-fund) amount))
+    (ok true)
+  )
+)
+
+;; NEW FUNCTION 3: Batch vote on multiple proposals
 (define-public (batch-vote (proposal-votes (list 10 { proposal-id: uint, support: bool })))
   (begin
     (fold batch-vote-helper proposal-votes (ok true))
@@ -155,6 +177,100 @@
   )
 )
 
+;; NEW FUNCTION 4: Set proposal category/tag
+(define-public (set-proposal-category (proposal-id uint) (category (string-ascii 50)))
+  (let ((proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found)))
+    (asserts! (is-eq tx-sender (get student proposal)) err-owner-only)
+    (map-set proposal-categories { proposal-id: proposal-id } { category: category })
+    (ok true)
+  )
+)
+
+;; Enhanced read-only functions
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? proposals { proposal-id: proposal-id })
+)
+
+(define-read-only (get-donor-contribution (donor principal))
+  (default-to u0 (get amount (map-get? donor-contributions { donor: donor })))
+)
+
+(define-read-only (get-total-fund)
+  (var-get total-fund)
+)
+
+;; NEW READ-ONLY FUNCTION: Get student profile
+(define-read-only (get-student-profile (student principal))
+  (map-get? student-profiles { student: student })
+)
+
+;; NEW READ-ONLY FUNCTION: Get proposal category
+(define-read-only (get-proposal-category (proposal-id uint))
+  (map-get? proposal-categories { proposal-id: proposal-id })
+)
+
+;; NEW READ-ONLY FUNCTION: Check if proposal is still active (within voting period)
+(define-read-only (is-proposal-active (proposal-id uint))
+  (match (map-get? proposals { proposal-id: proposal-id })
+    proposal (< (- stacks-block-height (get created-at proposal)) (var-get proposal-duration))
+    false
+  )
+)
+
+;; NEW READ-ONLY FUNCTION: Get proposal statistics
+(define-read-only (get-proposal-stats (proposal-id uint))
+  (match (map-get? proposals { proposal-id: proposal-id })
+    proposal (some {
+      total-votes: (+ (get votes-for proposal) (get votes-against proposal)),
+      vote-ratio: (if (> (+ (get votes-for proposal) (get votes-against proposal)) u0)
+                    (/ (* (get votes-for proposal) u100) (+ (get votes-for proposal) (get votes-against proposal)))
+                    u0),
+      is-winning: (> (get votes-for proposal) (get votes-against proposal)),
+      blocks-remaining: (if (>= (- stacks-block-height (get created-at proposal)) (var-get proposal-duration))
+                          u0
+                          (- (var-get proposal-duration) (- stacks-block-height (get created-at proposal))))
+    })
+    none
+  )
+)
+
+;; NEW FUNCTION 5: Withdraw partial contribution (donor can reclaim unused funds)
+(define-public (withdraw-contribution (amount uint))
+  (let ((donor-contrib (get-donor-contribution tx-sender)))
+    (asserts! (>= donor-contrib amount) err-insufficient-funds)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
+    (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+    (var-set total-fund (- (var-get total-fund) amount))
+    (map-set donor-contributions 
+      { donor: tx-sender } 
+      { amount: (- donor-contrib amount) })
+    (ok true)
+  )
+)
+
+;; NEW FUNCTION 6: Update proposal voting duration (owner only)
+(define-public (update-proposal-duration (new-duration uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> new-duration u0) err-invalid-amount)
+    (asserts! (<= new-duration u1440) err-invalid-amount) ;; Max 10 days (assuming 10 min blocks)
+    (var-set proposal-duration new-duration)
+    (ok new-duration)
+  )
+)
+
+;; NEW READ-ONLY FUNCTION: Get voting history for a specific voter
+(define-read-only (get-voter-history (voter principal) (proposal-id uint))
+  (map-get? votes { proposal-id: proposal-id, voter: voter })
+)
+
+;; NEW READ-ONLY FUNCTION: Get current proposal duration setting
+(define-read-only (get-proposal-duration)
+  (var-get proposal-duration)
+)
+
+;; NEW FUNCTION 7: Delegate voting power to another address
 (define-public (delegate-voting-power (delegate principal))
   (begin
     (asserts! (not (is-eq tx-sender delegate)) err-invalid-amount)
@@ -164,6 +280,7 @@
   )
 )
 
+;; NEW FUNCTION 8: Create milestone-based proposal with multiple payments
 (define-public (submit-milestone-proposal 
   (total-amount uint) 
   (description (string-ascii 500))
@@ -184,7 +301,7 @@
         votes-for: u0,
         votes-against: u0,
         executed: false,
-        created-at: block-height
+        created-at: stacks-block-height
       }
     )
     
@@ -203,111 +320,22 @@
   )
 )
 
-(define-public (emergency-withdraw (amount uint))
-  (begin
-    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
-    (try! (as-contract (stx-transfer? amount tx-sender contract-owner)))
-    (var-set total-fund (- (var-get total-fund) amount))
-    (ok true)
-  )
-)
-
-(define-public (set-proposal-category (proposal-id uint) (category (string-ascii 50)))
-  (let ((proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found)))
-    (asserts! (is-eq tx-sender (get student proposal)) err-owner-only)
-    (map-set proposal-categories { proposal-id: proposal-id } { category: category })
-    (ok true)
-  )
-)
-
-(define-public (withdraw-contribution (amount uint))
-  (let ((donor-contrib (get-donor-contribution tx-sender)))
-    (asserts! (>= donor-contrib amount) err-insufficient-funds)
-    (asserts! (> amount u0) err-invalid-amount)
-    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
-    (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
-    (var-set total-fund (- (var-get total-fund) amount))
-    (map-set donor-contributions 
-      { donor: tx-sender } 
-      { amount: (- donor-contrib amount) })
-    (ok true)
-  )
-)
-
-(define-public (update-proposal-duration (new-duration uint))
-  (begin
-    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-    (asserts! (> new-duration u0) err-invalid-amount)
-    (asserts! (<= new-duration u1440) err-invalid-amount) ;; Max 10 days (assuming 10 min blocks)
-    (var-set proposal-duration new-duration)
-    (ok new-duration)
-  )
-)
-
-(define-read-only (get-proposal (proposal-id uint))
-  (map-get? proposals { proposal-id: proposal-id })
-)
-
-(define-read-only (get-donor-contribution (donor principal))
-  (default-to u0 (get amount (map-get? donor-contributions { donor: donor })))
-)
-
-(define-read-only (get-total-fund)
-  (var-get total-fund)
-)
-
-(define-read-only (get-student-profile (student principal))
-  (map-get? student-profiles { student: student })
-)
-
-(define-read-only (get-proposal-category (proposal-id uint))
-  (map-get? proposal-categories { proposal-id: proposal-id })
-)
-
-(define-read-only (is-proposal-active (proposal-id uint))
-  (match (map-get? proposals { proposal-id: proposal-id })
-    proposal (< (- block-height (get created-at proposal)) (var-get proposal-duration))
-    false
-  )
-)
-
-(define-read-only (get-proposal-stats (proposal-id uint))
-  (match (map-get? proposals { proposal-id: proposal-id })
-    proposal (some {
-      total-votes: (+ (get votes-for proposal) (get votes-against proposal)),
-      vote-ratio: (if (> (+ (get votes-for proposal) (get votes-against proposal)) u0)
-                    (/ (* (get votes-for proposal) u100) (+ (get votes-for proposal) (get votes-against proposal)))
-                    u0),
-      is-winning: (> (get votes-for proposal) (get votes-against proposal)),
-      blocks-remaining: (if (>= (- block-height (get created-at proposal)) (var-get proposal-duration))
-                          u0
-                          (- (var-get proposal-duration) (- block-height (get created-at proposal))))
-    })
-    none
-  )
-)
-
-(define-read-only (get-voter-history (voter principal) (proposal-id uint))
-  (map-get? votes { proposal-id: proposal-id, voter: voter })
-)
-
-(define-read-only (get-proposal-duration)
-  (var-get proposal-duration)
-)
-
+;; NEW READ-ONLY FUNCTION: Get voting delegate for a user
 (define-read-only (get-voting-delegate (delegator principal))
   (map-get? voting-delegates { delegator: delegator })
 )
 
+;; Get milestone proposal details
 (define-read-only (get-milestone-proposal (proposal-id uint))
   (map-get? milestone-proposals { proposal-id: proposal-id })
 )
 
+;; Calculate total donations by all donors
 (define-read-only (get-total-donations)
   (var-get total-fund)
 )
 
+;; Check if user can vote (either directly or as delegate)
 (define-read-only (can-vote (voter principal) (proposal-id uint))
   (and 
     (is-some (map-get? proposals { proposal-id: proposal-id }))
