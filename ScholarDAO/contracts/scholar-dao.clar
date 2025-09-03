@@ -202,3 +202,46 @@
     (ok proposal-id)
   )
 )
+
+(define-public (emergency-withdraw (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
+    (try! (as-contract (stx-transfer? amount tx-sender contract-owner)))
+    (var-set total-fund (- (var-get total-fund) amount))
+    (ok true)
+  )
+)
+
+(define-public (set-proposal-category (proposal-id uint) (category (string-ascii 50)))
+  (let ((proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found)))
+    (asserts! (is-eq tx-sender (get student proposal)) err-owner-only)
+    (map-set proposal-categories { proposal-id: proposal-id } { category: category })
+    (ok true)
+  )
+)
+
+(define-public (withdraw-contribution (amount uint))
+  (let ((donor-contrib (get-donor-contribution tx-sender)))
+    (asserts! (>= donor-contrib amount) err-insufficient-funds)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= (var-get total-fund) amount) err-insufficient-funds)
+    (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+    (var-set total-fund (- (var-get total-fund) amount))
+    (map-set donor-contributions 
+      { donor: tx-sender } 
+      { amount: (- donor-contrib amount) })
+    (ok true)
+  )
+)
+
+(define-public (update-proposal-duration (new-duration uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> new-duration u0) err-invalid-amount)
+    (asserts! (<= new-duration u1440) err-invalid-amount) ;; Max 10 days (assuming 10 min blocks)
+    (var-set proposal-duration new-duration)
+    (ok new-duration)
+  )
+)
+
